@@ -1,0 +1,51 @@
+# TEMPORARY Windows live proof for PR #145592 (never merges).
+name: proof-145592
+on:
+  push:
+    branches: ['proof/145592-win']
+permissions:
+  contents: read
+jobs:
+  move:
+    name: move-item-partial-tree
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - name: Move-Item with a held file (same + cross volume)
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          "PS $($PSVersionTable.PSVersion)  TEMP=$env:TEMP  LOCALAPPDATA=$env:LOCALAPPDATA  RUNNER_TEMP=$env:RUNNER_TEMP"
+          powershell -NoProfile -ExecutionPolicy Bypass -File proof\probe_move.ps1 -DestRoot (Join-Path $env:LOCALAPPDATA 'mvprobe')
+          powershell -NoProfile -ExecutionPolicy Bypass -File proof\probe_move.ps1 -DestRoot (Join-Path $env:RUNNER_TEMP 'mvprobe')
+          exit 0
+  pinned:
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [base, head]
+        mode: [poisoned, locked]
+    name: pinned-${{ matrix.leg }}-${{ matrix.mode }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with: { fetch-depth: 0 }
+      - name: Get-PinnedGit on the reporter's store state
+        shell: powershell
+        timeout-minutes: 25
+        env: { LEG: '${{ matrix.leg }}', MODE: '${{ matrix.mode }}' }
+        run: |
+          $ps1 = 'scripts\install.ps1'
+          if ($env:LEG -eq 'base') { git show e5ea5fd9ccd:scripts/install.ps1 | Set-Content -Encoding UTF8 base-install.ps1; $ps1 = 'base-install.ps1' }
+          $work = Join-Path $env:RUNNER_TEMP 'w'
+          New-Item -ItemType Directory -Force $work | Out-Null
+          $ps1 = (Resolve-Path $ps1).Path
+          $null = New-Item -ItemType File -Force (Join-Path $work 'empty.txt')
+          $p = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Resolve-Path proof\probe_pinned.ps1).Path,'-Installer',$ps1,'-Work',$work,'-Mode',$env:MODE) `
+               -RedirectStandardOutput (Join-Path $work 'o.log') -RedirectStandardError (Join-Path $work 'e.log') -RedirectStandardInput (Join-Path $work 'empty.txt') -NoNewWindow -PassThru -Wait
+          "exit=$($p.ExitCode)"
+          Get-Content (Join-Path $work 'o.log') -Tail 30
+          Get-Content (Join-Path $work 'e.log') -Tail 30
+          exit 0
